@@ -123,8 +123,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   // auth via secret header or query param
   const url = new URL(req.url);
-  const secret = req.headers.get("x-cron-secret") || url.searchParams.get("secret");
-  if (secret !== CRON_SECRET) {
+  // auth: Vercel Cron sends Authorization: Bearer CRON_SECRET; manual calls use ?secret=
+  const authHeader = req.headers.get("authorization") || "";
+  const secret =
+    (authHeader.startsWith("Bearer ") && process.env.CRON_SECRET && authHeader.slice(7) === process.env.CRON_SECRET
+      ? process.env.CRON_SECRET
+      : null) ||
+    url.searchParams.get("secret");
+  if (!secret || secret !== CRON_SECRET) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
 
