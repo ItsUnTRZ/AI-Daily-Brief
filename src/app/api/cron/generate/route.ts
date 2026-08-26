@@ -12,7 +12,7 @@ async function collectCandidates(): Promise<Candidate[]> {
   const seen = new Set<string>();
   const out: Candidate[] = [];
   const since = Math.floor(Date.now() / 1000) - 36 * 3600;
-  for (const kw of ["AI", "LLM", "OpenAI", "Claude", "Gemini", "GPT"]) {
+  for (const kw of ["LLM", "OpenAI", "Claude", "Gemini", "GPT", "DeepSeek", "Qwen", "Grok", "Mistral", "Llama", "ox alpha", "GLM", "Kimi", "foundation model", "open weights", "benchmark"]) {
     const url = `https://hn.algolia.com/api/v1/search?query=${encodeURIComponent(kw)}&tags=story&numericFilters=created_at_i>${since},points>30&hitsPerPage=25`;
     try {
       const r = await fetch(url, { headers: { "User-Agent": "ai-daily-brief/1.0" } });
@@ -46,7 +46,10 @@ async function writeBrief(cands: Candidate[], existingTitles: string[]) {
   const list = cands
     .map((c, i) => `${i + 1}. ${c.title}\n   URL: ${c.url} | HN: ${c.hnUrl} (${c.points} pts, ${c.comments} comments)`)
     .join("\n");
-  const prompt = `คุณคือบรรณาธิการข่าว AI ภาษาไทยของ "AI Daily Brief" — เลือกข่าวที่น่าสนใจที่สุด "1 เรื่อง" จาก list ด้านล่าง (เกณฑ์: ใหม่ + สำคัญ + engagement สูง)
+  const prompt = `คุณคือบรรณาธิการข่าว AI ภาษาไทยของ "AI Daily Brief" — เลือกข่าวที่น่าสนใจที่สุด "1 เรื่อง" จาก list ด้านล่าง
+
+⚠️ เกณฑ์หลัก: **เน้นข่าวเกี่ยวกับโมเดล AI เป็นหลัก** — โมเดลใหม่ (release, stealth model, open weights), benchmark/ความสามารถของโมเดล, เทคนิค train/inference ใหม่ๆ
+❌ หลีกเลี่ยง: ข่าว hardware/ชิป/ธุรกิจ/นโยบาย ยกเว้นจะไม่มีข่าวโมเดลเลยจึงเลือกได้ แต่ต้องระบุเหตุผลใน note
 ${existingTitles.length ? `\n⚠️ เรื่องเหล่านี้เขียนไปแล้ว ห้ามเลือกซ้ำ:\n${existingTitles.map((t) => "- " + t).join("\n")}\n` : ""}
 Candidate stories:
 ${list}
@@ -60,6 +63,7 @@ ${list}
   "takeaway": "สรุปสั้น 1 ประโยคที่ reader เอาไปใช้ได้",
   "runners_up": [{"title":"...","why":"ทำไมน่าจับตา","url":"..."}],
   "tag": "hardware|model|technique|industry",
+  "note": "เหตุผลสั้นๆ ว่าทำไมเลือกเรื่องนี้ (ถ้าเป็น hardware/business เพราะไม่มีข่าวโมเดลใหม่ใน list ให้บอก)",
   "reading_min": <number 3-6>,
   "cover_prompt": "English prompt for editorial cover illustration, dark near-black background #08090a, deep ocean blue palette, no text in image"
 }`;
