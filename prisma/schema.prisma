@@ -3,26 +3,26 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Post {
-  id          String   @id @default(cuid())
-  slug        String   @unique
-  title       String
-  tldr        String
-  body        String // markdown
-  tag         String   @default("general") // hardware | model | technique | industry | general
-  sources     String   @default("[]") // JSON array [{name,url}]
-  runnersUp   String   @default("[]") // JSON array [{title,why,url}]
-  takeaway    String   @default("")
-  readingMin  Int      @default(4)
-  coverImage  String? // path under /covers/
-  published   Boolean  @default(false)
+  id            String   @id @default(cuid())
+  slug          String   @unique
+  title         String
+  tldr          String
+  body          String
+  tag           String   @default("general") // hardware | model | technique | industry | general
+  sources       String   @default("[]") // JSON array [{name,url}]
+  runnersUp     String   @default("[]") // JSON array [{title,why,url}]
+  takeaway      String   @default("")
+  readingMin    Int      @default(4)
+  coverImage    String? // path under /covers/ or absolute URL
+  published     Boolean  @default(false)
   featuredUntil String? // ISO date — post stays "today's pick" until this date
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
   @@index([published, createdAt])
 }
