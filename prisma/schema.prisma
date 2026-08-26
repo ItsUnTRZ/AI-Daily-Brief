@@ -1,0 +1,28 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Post {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  title       String
+  tldr        String
+  body        String // markdown
+  tag         String   @default("general") // hardware | model | technique | industry | general
+  sources     String   @default("[]") // JSON array [{name,url}]
+  runnersUp   String   @default("[]") // JSON array [{title,why,url}]
+  takeaway    String   @default("")
+  readingMin  Int      @default(4)
+  coverImage  String? // path under /covers/
+  published   Boolean  @default(false)
+  featuredUntil String? // ISO date — post stays "today's pick" until this date
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([published, createdAt])
+}
