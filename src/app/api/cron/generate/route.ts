@@ -154,13 +154,21 @@ export async function POST(req: NextRequest) {
     try {
       const cdnUrl = await generateCover(brief.cover_prompt || "editorial illustration about artificial intelligence news, dark near-black background #08090a, deep ocean blue color palette, cinematic lighting, no text");
       if (cdnUrl) {
-        // download and store locally under public/covers
         const imgRes = await fetch(cdnUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
         if (imgRes.ok) {
           const buf = Buffer.from(await imgRes.arrayBuffer());
-          const path = `${process.cwd()}/public/covers/${slugify(sel.title)}.jpg`;
-          await import("fs/promises").then((fs) => fs.writeFile(path, buf));
-          coverUrl = `/covers/${slugify(sel.title)}.jpg`;
+          // serverless FS is read-only except /tmp — store under /tmp/covers and reference by URL path
+          try {
+            const fs = await import("fs/promises");
+            await fs.mkdir(`${process.cwd()}/public/covers`, { recursive: true });
+            await fs.writeFile(`${process.cwd()}/public/covers/${slugify(sel.title)}.jpg`, buf);
+            coverUrl = `/covers/${slugify(sel.title)}.jpg`;
+          } catch {
+            // read-only FS (Vercel): serve via API route from /tmp
+            await import("fs/promises").then((fs) => fs.mkdir("/tmp/covers", { recursive: true }));
+            await import("fs/promises").then((fs) => fs.writeFile(`/tmp/covers/${slugify(sel.title)}.jpg`, buf));
+            coverUrl = `/api/covers/${slugify(sel.title)}.jpg`;
+          }
         }
       }
     } catch (e) {
