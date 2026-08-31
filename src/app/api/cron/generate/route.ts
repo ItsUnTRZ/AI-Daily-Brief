@@ -1,5 +1,8 @@
 // Auto-generate pipeline: collect news → Gemini writes Thai brief → Leonardo cover → insert DB
+import { mkdir, stat, writeFile } from "fs/promises";
+import { join } from "path";
 import { NextRequest, NextResponse } from "next/server";
+import { assertCoverUrl, assertImagePayload, type ImageFormat } from "@/lib/cover-image";
 import { prisma } from "@/lib/db";
 
 const GEMINI_KEY = process.env.GEMINI_API_KEY!;
@@ -113,6 +116,68 @@ async function generateCover(coverPrompt: string): Promise<string | null> {
   return null;
 }
 
+const FALLBACK_COVER_PROMPT =
+  "Editorial illustration about artificial intelligence news, dark near-black background #08090a, deep navy and cyan palette, cinematic lighting, no text, no letters, no typography, no logo";
+
+type PersistedCover = {
+  url: string;
+  filePath: string;
+};
+
+async function persistCover(buffer: Buffer, slug: string, format: ImageFormat): Promise<PersistedCover> {
+  const filename = `${slug}.${format.extension}`;
+  const destinations = [
+    { directory: join(process.cwd(), "public", "covers"), url: `/covers/${filename}` },
+    { directory: "/tmp/covers", url: `/api/covers/${filename}` },
+  ];
+
+  let lastError: unknown = null;
+  for (const destination of destinations) {
+    const filePath = join(/* turbopackIgnore: true */ destination.directory, filename);
+    try {
+      await mkdir(destination.directory, { recursive: true });
+      await writeFile(filePath, buffer);
+      const saved = await stat(/* turbopackIgnore: true */ filePath);
+      if (!saved.isFile() || saved.size !== buffer.byteLength) {
+        throw new Error(`cover file verification failed: ${filePath}`);
+      }
+      return { url: destination.url, filePath };
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`unable to persist cover image: ${message}`);
+}
+
+async function generateRequiredCover(coverPrompt: string, slug: string): Promise<PersistedCover> {
+  const prompts = [coverPrompt.trim() || FALLBACK_COVER_PROMPT, FALLBACK_COVER_PROMPT];
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < prompts.length; attempt += 1) {
+    try {
+      const cdnUrl = await generateCover(prompts[attempt]);
+      if (!cdnUrl) throw new Error("image provider returned no URL");
+
+      const imageResponse = await fetch(cdnUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+      if (!imageResponse.ok) {
+        throw new Error(`cover download failed with HTTP ${imageResponse.status}`);
+      }
+
+      const buffer = Buffer.from(await imageResponse.arrayBuffer());
+      const format = assertImagePayload(buffer, imageResponse.headers.get("content-type") ?? "");
+      return await persistCover(buffer, slug, format);
+    } catch (error) {
+      lastError = error;
+      console.error(`cover attempt ${attempt + 1}/${prompts.length} failed:`, error);
+    }
+  }
+
+  const message = lastError instanceof Error ? lastError.message : String(lastError);
+  throw new Error(`cover generation failed after ${prompts.length} attempts: ${message}`);
+}
+
 function slugify(s: string): string {
   return (
     s.toLowerCase().replace(/[^\w\s-]/g, "").trim().replace(/\s+/g, "-").slice(0, 70) ||
@@ -153,36 +218,29 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, reason: "duplicate skipped" });
     }
 
-    // cover image
-    let coverUrl: string | null = null;
+    // A post is never published without a verified cover asset.
+    const postSlug = slugify(sel.title);
+    let coverUrl: string;
     try {
-      const cdnUrl = await generateCover(brief.cover_prompt || "editorial illustration about artificial intelligence news, dark near-black background #08090a, deep ocean blue color palette, cinematic lighting, no text");
-      if (cdnUrl) {
-        const imgRes = await fetch(cdnUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
-        if (imgRes.ok) {
-          const buf = Buffer.from(await imgRes.arrayBuffer());
-          // serverless FS is read-only except /tmp — store under /tmp/covers and reference by URL path
-          try {
-            const fs = await import("fs/promises");
-            await fs.mkdir(`${process.cwd()}/public/covers`, { recursive: true });
-            await fs.writeFile(`${process.cwd()}/public/covers/${slugify(sel.title)}.jpg`, buf);
-            coverUrl = `/covers/${slugify(sel.title)}.jpg`;
-          } catch {
-            // read-only FS (Vercel): serve via API route from /tmp
-            await import("fs/promises").then((fs) => fs.mkdir("/tmp/covers", { recursive: true }));
-            await import("fs/promises").then((fs) => fs.writeFile(`/tmp/covers/${slugify(sel.title)}.jpg`, buf));
-            coverUrl = `/api/covers/${slugify(sel.title)}.jpg`;
-          }
-        }
-      }
+      const cover = await generateRequiredCover(
+        brief.cover_prompt || FALLBACK_COVER_PROMPT,
+        postSlug,
+      );
+      coverUrl = assertCoverUrl(cover.url);
+      console.log(`cover verified: ${cover.filePath} → ${coverUrl}`);
     } catch (e) {
-      console.error("cover failed:", e); // non-fatal
+      const message = e instanceof Error ? e.message : String(e);
+      console.error("cover required; refusing to publish:", message);
+      return NextResponse.json(
+        { ok: false, reason: "cover generation failed; post not published", error: message },
+        { status: 502 },
+      );
     }
 
     const tomorrow = new Date(Date.now() + 86400000).toISOString().slice(0, 10);
     const post = await prisma.post.create({
       data: {
-        slug: slugify(sel.title),
+        slug: postSlug,
         title: brief.title_th,
         tldr: brief.tldr,
         body: brief.body_markdown,
