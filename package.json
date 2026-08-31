@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@prisma/client": "^6.19.3",
+    "@vercel/blob": "^1.1.1",
     "bcryptjs": "^3.0.3",
     "jsonwebtoken": "^9.0.3",
     "marked": "^18.0.11",

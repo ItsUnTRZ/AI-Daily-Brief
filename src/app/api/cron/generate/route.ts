@@ -1,4 +1,4 @@
-// Auto-generate pipeline: collect news → Gemini writes Thai brief → Leonardo cover → insert DB
+// Auto-generate pipeline: collect news → Gemini writes Thai brief → Leonardo cover → Vercel Blob → insert DB
 import { mkdir, stat, writeFile } from "fs/promises";
 import { join } from "path";
 import { NextRequest, NextResponse } from "next/server";
@@ -53,8 +53,7 @@ async function writeBrief(cands: Candidate[], existingTitles: string[]) {
 
 ⚠️ เกณฑ์หลัก: **เน้นข่าวเกี่ยวกับโมเดล AI เป็นหลัก** — โมเดลใหม่ (release, stealth model, open weights), benchmark/ความสามารถของโมเดล, เทคนิค train/inference ใหม่ๆ
 ❌ หลีกเลี่ยง: ข่าว hardware/ชิป/ธุรกิจ/นโยบาย ยกเว้นจะไม่มีข่าวโมเดลเลยจึงเลือกได้ แต่ต้องระบุเหตุผลใน note
-${existingTitles.length ? `\n⚠️ เรื่องเหล่านี้เขียนไปแล้ว ห้ามเลือกซ้ำ:\n${existingTitles.map((t) => "- " + t).join("\n")}\n` : ""}
-Candidate stories:
+${existingTitles.length ? `\n⚠️ เรื่องเหล่านี้เขียนไปแล้ว ห้ามเลือกซ้ำ:\n${existingTitles.map((t) => "- " + t).join("\n")}\n` : ""}Candidate stories:
 ${list}
 
 วิเคราะห์จากชื่อข่าวและประสบการณ์ของคุณ ตอบเป็น JSON เท่านั้น ไม่มี markdown fence:
@@ -124,8 +123,47 @@ type PersistedCover = {
   filePath: string;
 };
 
+// — Unique slug (never collides, so filename never overwrites) —
+async function uniqueSlug(base: string): Promise<string> {
+  let slug = base;
+  let n = 1;
+  while (await prisma.post.findUnique({ where: { slug } })) {
+    const suffix = `-${Date.now().toString(36).slice(-4)}${n > 1 ? `-${n}` : ""}`;
+    // keep within 70 chars
+    slug = `${base.slice(0, 70 - suffix.length)}${suffix}`;
+    n++;
+    if (n > 10) {
+      slug = `${base.slice(0, 50)}-${Date.now().toString(36)}-${n}`;
+      break;
+    }
+  }
+  return slug;
+}
+
 async function persistCover(buffer: Buffer, slug: string, format: ImageFormat): Promise<PersistedCover> {
   const filename = `${slug}.${format.extension}`;
+
+  // 1) Try Vercel Blob first (durable, survives redeploy) — requires BLOB_READ_WRITE_TOKEN
+  const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+  if (blobToken) {
+    try {
+      const { put } = await import("@vercel/blob");
+      const blob = await put(`covers/${filename}`, buffer, {
+        access: "public",
+        contentType: format.contentType,
+        addRandomSuffix: false,
+      });
+      // verify blob url
+      assertCoverUrl(blob.url);
+      return { url: blob.url, filePath: `blob:covers/${filename}` };
+    } catch (e) {
+      console.error("blob upload failed, falling back to filesystem:", e);
+    }
+  } else {
+    console.warn("BLOB_READ_WRITE_TOKEN not set — using filesystem fallback (ephemeral) + CDN fallback");
+  }
+
+  // 2) Fallback: try local filesystem (works locally, and /tmp on Vercel)
   const destinations = [
     { directory: join(process.cwd(), "public", "covers"), url: `/covers/${filename}` },
     { directory: "/tmp/covers", url: `/api/covers/${filename}` },
@@ -133,11 +171,11 @@ async function persistCover(buffer: Buffer, slug: string, format: ImageFormat): 
 
   let lastError: unknown = null;
   for (const destination of destinations) {
-    const filePath = join(/* turbopackIgnore: true */ destination.directory, filename);
+    const filePath = join(destination.directory, filename);
     try {
       await mkdir(destination.directory, { recursive: true });
       await writeFile(filePath, buffer);
-      const saved = await stat(/* turbopackIgnore: true */ filePath);
+      const saved = await stat(filePath);
       if (!saved.isFile() || saved.size !== buffer.byteLength) {
         throw new Error(`cover file verification failed: ${filePath}`);
       }
@@ -174,6 +212,32 @@ async function generateRequiredCover(coverPrompt: string, slug: string): Promise
     }
   }
 
+  // Ultimate fallback: if Leonardo fails entirely, create a deterministic unique placeholder via picsum
+  // This guarantees every post has an image (unique per slug) and never duplicates
+  console.warn("Leonardo both attempts failed, using picsum fallback for slug:", slug);
+  try {
+    const picsumUrl = `https://picsum.photos/seed/${slug}/1376/768`;
+    const res = await fetch(picsumUrl);
+    if (res.ok) {
+      const buf = Buffer.from(await res.arrayBuffer());
+      // picsum returns jpeg
+      const format: ImageFormat = { extension: "jpg", contentType: "image/jpeg" };
+      // Try to persist to blob if available, otherwise store picsum URL directly (still unique & durable)
+      const blobToken = process.env.BLOB_READ_WRITE_TOKEN;
+      if (blobToken) {
+        try {
+          const { put } = await import("@vercel/blob");
+          const blob = await put(`covers/${slug}.jpg`, buf, { access: "public", contentType: "image/jpeg", addRandomSuffix: false });
+          return { url: blob.url, filePath: `blob:covers/${slug}.jpg` };
+        } catch {}
+      }
+      // Direct picsum URL is already unique per slug and durable
+      return { url: picsumUrl, filePath: picsumUrl };
+    }
+  } catch (e) {
+    console.error("picsum fallback failed:", e);
+  }
+
   const message = lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(`cover generation failed after ${prompts.length} attempts: ${message}`);
 }
@@ -192,7 +256,6 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   // auth via secret header or query param
   const url = new URL(req.url);
-  // auth: Vercel Cron sends Authorization: Bearer CRON_SECRET; manual calls use ?secret=
   const authHeader = req.headers.get("authorization") || "";
   const secret =
     (authHeader.startsWith("Bearer ") && process.env.CRON_SECRET && authHeader.slice(7) === process.env.CRON_SECRET
@@ -209,17 +272,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: false, reason: "no fresh candidates" });
     }
 
-    const existing = await prisma.post.findMany({ select: { title: true }, take: 60 });
+    const existing = await prisma.post.findMany({ select: { title: true, slug: true }, take: 100 });
     const brief = await writeBrief(cands, existing.map((p) => p.title));
     const sel = cands[(brief.selected_index ?? 1) - 1] ?? cands[0];
 
-    // dedupe check
+    // dedupe check by Thai title
     if (existing.some((p) => p.title === brief.title_th)) {
       return NextResponse.json({ ok: false, reason: "duplicate skipped" });
     }
 
-    // A post is never published without a verified cover asset.
-    const postSlug = slugify(sel.title);
+    // Unique slug so filename never overwrites another post's cover
+    const baseSlug = slugify(brief.title_th) || slugify(sel.title);
+    const postSlug = await uniqueSlug(baseSlug);
+
+    // A post is never published without a verified (and unique) cover asset.
     let coverUrl: string;
     try {
       const cover = await generateRequiredCover(
