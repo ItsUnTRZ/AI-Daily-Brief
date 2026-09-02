@@ -41,12 +41,15 @@ export default async function PostPage({ params }: { params: Promise<{ slug: str
             {post.title}
           </h1>
 
-          {post.coverImage && (
-            <div className="relative mt-6 aspect-[21/9] w-full overflow-hidden rounded-2xl" style={{ border: "1px solid var(--border-std)" }}>
-              <Image src={post.coverImage} alt={post.title} fill priority className="object-cover" style={{ filter: "brightness(0.92)" }} />
-              <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent 60%, rgba(8,9,10,0.7))" }} />
-            </div>
-          )}
+          {(() => {
+            const coverSrc = post.coverImage || `https://picsum.photos/seed/${post.slug}/1376/768`;
+            return (
+              <div className="relative mt-6 aspect-[21/9] w-full overflow-hidden rounded-2xl" style={{ border: "1px solid var(--border-std)" }}>
+                <Image src={coverSrc} alt={post.title} fill priority className="object-cover" style={{ filter: "brightness(0.92)" }} />
+                <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent 60%, rgba(8,9,10,0.7))" }} />
+              </div>
+            );
+          })()}
 
           <div
             className="mt-6 rounded-xl p-5 text-[15.5px] leading-relaxed"

@@ -44,19 +44,22 @@ export default async function Home() {
                   className="h-[2px] opacity-100"
                   style={{ background: "linear-gradient(90deg, var(--accent), var(--teal))" }}
                 />
-                {featured.coverImage && (
-                  <div className="relative aspect-[21/9] w-full overflow-hidden">
-                    <Image
-                      src={featured.coverImage}
-                      alt={featured.title}
-                      fill
-                      priority
-                      className="object-cover transition-transform duration-300 group-hover:scale-[1.02]"
-                      style={{ filter: "brightness(0.92)" }}
-                    />
-                    <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent 55%, rgba(8,9,10,0.85))" }} />
-                  </div>
-                )}
+                {(() => {
+                  const coverSrc = featured.coverImage || `https://picsum.photos/seed/${featured.slug}/1376/768`;
+                  return (
+                    <div className="relative aspect-[21/9] w-full overflow-hidden">
+                      <Image
+                        src={coverSrc}
+                        alt={featured.title}
+                        fill
+                        priority
+                        className="object-cover transition-transform duration-300 group-hover:scale-[1.02]"
+                        style={{ filter: "brightness(0.92)" }}
+                      />
+                      <div className="absolute inset-0" style={{ background: "linear-gradient(180deg, transparent 55%, rgba(8,9,10,0.85))" }} />
+                    </div>
+                  );
+                })()}
                 <div className="group-hover:border-[rgba(74,158,255,0.45)] p-8 sm:p-10 [&:hover]:border-[rgba(74,158,255,0.4)]" style={{ borderLeft: "none" }}>
                   <div className="flex flex-wrap items-center gap-3">
                     <TagPill tag={featured.tag} />
